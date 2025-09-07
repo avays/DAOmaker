@@ -1,0 +1,310 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model DAO {
+  id          String   @id @default(uuid())
+  address     String   @unique
+  chain       String
+  name        String
+  symbol      String
+  description String?
+  category    String?
+  logoUrl     String?
+  website     String?
+  createdBy   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Governance settings
+  votingPeriod       Int
+  votingDelay        Int
+  proposalThreshold  String // BigInt as string
+  quorum            Int
+  
+  // Enhanced governance features
+  rankedChoiceEnabled       Boolean @default(false)
+  privateVotingEnabled      Boolean @default(false)
+  timeWeightedVotingEnabled Boolean @default(false)
+  rageQuitEnabled          Boolean @default(false)
+  rageQuitWindow           Int?
+  rageQuitPenalty         Float?
+  
+  // Token info
+  tokenAddress String
+  tokenSupply  String // BigInt as string
+  
+  // Treasury info
+  treasuryAddress  String
+  treasuryValueUSD Float?
+  
+  // Metadata
+  memberCount   Int     @default(0)
+  proposalCount Int     @default(0)
+  active        Boolean @default(true)
+  
+  // Relations
+  members              Member[]
+  proposals            Proposal[]
+  treasuryTransactions TreasuryTransaction[]
+  investments          Investment[]
+  rageQuitRequests     RageQuitRequest[]
+  activityFeed         ActivityFeed[]
+  
+  @@index([chain])
+  @@index([category])
+  @@index([createdAt])
+}
+
+model Member {
+  id             String   @id @default(uuid())
+  daoId          String
+  walletAddress  String
+  tokenBalance   String   @default("0") // BigInt as string
+  votingPower    String   @default("0") // BigInt as string
+  delegatedTo    String?
+  joinedAt       DateTime @default(now())
+  lastActive     DateTime?
+  reputationScore Int     @default(0)
+  proposalsCreated Int    @default(0)
+  votesCast        Int    @default(0)
+  
+  // Relations
+  dao              DAO              @relation(fields: [daoId], references: [id], onDelete: Cascade)
+  votes            Vote[]
+  proposals        Proposal[]       @relation("ProposalCreator")
+  notifications    Notification[]
+  rageQuitRequests RageQuitRequest[]
+  
+  @@unique([daoId, walletAddress])
+  @@index([daoId, walletAddress])
+  @@index([votingPower])
+}
+
+model Proposal {
+  id            String   @id @default(uuid())
+  proposalId    String   @unique
+  daoId         String
+  proposerAddress String
+  title         String
+  description   String
+  proposalType  String
+  status        String   @default("pending")
+  
+  // Voting data
+  forVotes      String   @default("0") // BigInt as string
+  againstVotes  String   @default("0") // BigInt as string
+  abstainVotes  String   @default("0") // BigInt as string
+  
+  // Enhanced voting features
+  votingMethod  String?
+  commitEndTime DateTime?
+  revealEndTime DateTime?
+  
+  // Timestamps
+  createdAt     DateTime @default(now())
+  startTime     DateTime
+  endTime       DateTime
+  executionTime DateTime?
+  
+  // Execution data
+  executed      Boolean  @default(false)
+  executionHash String?
+  
+  // Relations
+  dao           DAO            @relation(fields: [daoId], references: [id], onDelete: Cascade)
+  proposer      Member         @relation("ProposalCreator", fields: [proposerAddress, daoId], references: [walletAddress, daoId])
+  votes         Vote[]
+  actions       ProposalAction[]
+  choices       ProposalChoice[]
+  rankedVotes   RankedVote[]
+  privateVotes  PrivateVote[]
+  rageQuitRequests RageQuitRequest[]
+  
+  @@index([daoId])
+  @@index([status])
+  @@index([endTime])
+}
+
+model ProposalAction {
+  id          String   @id @default(uuid())
+  proposalId  String
+  target      String
+  value       String   // BigInt as string
+  data        String
+  description String
+  
+  proposal    Proposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  
+  @@index([proposalId])
+}
+
+model ProposalChoice {
+  id          String   @id @default(uuid())
+  proposalId  String
+  choiceIndex Int
+  title       String
+  description String?
+  metadata    Json?
+  
+  proposal    Proposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  
+  @@index([proposalId])
+}
+
+model Vote {
+  id            String   @id @default(uuid())
+  proposalId    String
+  voterAddress  String
+  support       Int      // 0: against, 1: for, 2: abstain
+  votingPower   String   // BigInt as string
+  reason        String?
+  transactionHash String?
+  lockDuration  Int?     // For time-weighted voting (in days)
+  createdAt     DateTime @default(now())
+  
+  proposal      Proposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  voter         Member   @relation(fields: [voterAddress], references: [walletAddress])
+  
+  @@unique([proposalId, voterAddress])
+  @@index([proposalId])
+}
+
+model RankedVote {
+  id           String   @id @default(uuid())
+  proposalId   String
+  voterAddress String
+  rankings     Json     // Array of choice IDs
+  votingPower  String   // BigInt as string
+  createdAt    DateTime @default(now())
+  
+  proposal     Proposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  
+  @@unique([proposalId, voterAddress])
+  @@index([proposalId])
+}
+
+model PrivateVote {
+  id           String   @id @default(uuid())
+  proposalId   String
+  voterAddress String?  // Null for anonymous votes
+  commitHash   String
+  revealed     Boolean  @default(false)
+  support      Int?     // Revealed after commit phase
+  votingPower  String?  // Revealed after commit phase
+  nonce        String?  // Used for commit-reveal
+  createdAt    DateTime @default(now())
+  revealedAt   DateTime?
+  
+  proposal     Proposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  
+  @@unique([proposalId, commitHash])
+  @@index([proposalId])
+}
+
+model RageQuitRequest {
+  id            String   @id @default(uuid())
+  daoId         String
+  memberAddress String
+  proposalId    String
+  tokenAmount   String   // BigInt as string
+  treasuryShare Json     // Array of AssetShare objects
+  requestTime   DateTime @default(now())
+  executeAfter  DateTime
+  status        String   @default("pending")
+  executed      Boolean  @default(false)
+  executionHash String?
+  penalty       Float?
+  
+  dao          DAO      @relation(fields: [daoId], references: [id], onDelete: Cascade)
+  member       Member   @relation(fields: [memberAddress], references: [walletAddress])
+  proposal     Proposal @relation(fields: [proposalId], references: [id])
+  
+  @@index([daoId])
+  @@index([memberAddress])
+  @@index([status])
+}
+
+model TreasuryTransaction {
+  id              String   @id @default(uuid())
+  daoId           String
+  transactionType String   // deposit, withdrawal, swap
+  tokenAddress    String
+  amount          String   // BigInt as string
+  valueUSD        Float?
+  fromAddress     String?
+  toAddress       String?
+  transactionHash String   @unique
+  blockNumber     Int?
+  description     String?
+  createdAt       DateTime @default(now())
+  
+  dao             DAO      @relation(fields: [daoId], references: [id], onDelete: Cascade)
+  
+  @@index([daoId])
+  @@index([transactionType])
+  @@index([createdAt])
+}
+
+model Investment {
+  id               String   @id @default(uuid())
+  daoId            String
+  assetType        String
+  assetAddress     String?
+  assetName        String?
+  amount           String   // BigInt as string
+  purchasePrice    Float
+  currentPrice     Float?
+  purchaseValueUSD Float
+  currentValueUSD  Float?
+  roi              Float?
+  status           String   @default("active")
+  purchaseDate     DateTime
+  saleDate         DateTime?
+  proposalId       String?
+  
+  dao              DAO      @relation(fields: [daoId], references: [id], onDelete: Cascade)
+  
+  @@index([daoId])
+  @@index([status])
+  @@index([roi])
+}
+
+model ActivityFeed {
+  id           String   @id @default(uuid())
+  daoId        String
+  activityType String
+  actorAddress String?
+  targetId     String?
+  targetType   String?
+  description  String?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+  
+  dao          DAO      @relation(fields: [daoId], references: [id], onDelete: Cascade)
+  
+  @@index([daoId, createdAt])
+  @@index([activityType])
+}
+
+model Notification {
+  id           String   @id @default(uuid())
+  userAddress  String
+  daoId        String?
+  memberId     String?
+  type         String
+  title        String
+  message      String?
+  read         Boolean  @default(false)
+  actionUrl    String?
+  createdAt    DateTime @default(now())
+  
+  member       Member?  @relation(fields: [memberId], references: [id])
+  
+  @@index([userAddress, read, createdAt])
+}
